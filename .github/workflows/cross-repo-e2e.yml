@@ -217,7 +217,7 @@ jobs:
         run: |
           set -euo pipefail
           cd server
-          python .github/scripts/query_mcp.py --volume atl-e2e --device "${DEVICE_ID}"
+          python .github/scripts/query_mcp.py --container atl --device "${DEVICE_ID}"
 
       - name: No secret appears in any log
         if: always()

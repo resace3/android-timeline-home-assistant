@@ -112,7 +112,9 @@ class TestIngestion:
 
         assert second.is_replay is True
         assert second.stored_ids == []
-        assert len(second.duplicate_ids) == len(first.stored_ids)
+        # Every event in the request gets a verdict, including the copy that
+        # was already a duplicate within the batch itself.
+        assert len(second.duplicate_ids) == len(batch.events)
         assert database.count_events(DEVICE) == len(first.stored_ids)
 
     def test_same_events_in_a_new_batch_store_nothing_new(

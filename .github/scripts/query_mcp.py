@@ -30,24 +30,38 @@ def check(name: str, condition: bool, detail: Any = "") -> None:
         _failures.append(name)
 
 
-def copy_database(volume: str, destination: Path) -> None:
-    """Copy /data out of a named Docker volume into ``destination``."""
+def copy_database(container: str, destination: Path) -> None:
+    """Copy the app's /data out of the running container.
+
+    ``docker cp`` from the live container rather than a volume mount, so the
+    write-ahead log comes with it. Copying only the main database file would
+    silently lose whatever is still in the WAL, which is most of what the
+    test just wrote.
+    """
     # Fixed argv, no shell. `docker` is on the runner PATH by definition:
     # this script only ever runs inside a GitHub Actions job.
-    argv = [
-        "docker",
-        "run",
-        "--rm",
-        "-v",
-        f"{volume}:/data:ro",
-        "-v",
-        f"{destination}:/out",
-        "alpine:3.23",
-        "sh",
-        "-c",
-        "cp /data/*.sqlite3* /out/ 2>/dev/null || cp /data/*.sqlite3 /out/",
-    ]
-    subprocess.run(argv, check=True, capture_output=True)  # noqa: S603
+    subprocess.run(  # noqa: S603
+        ["docker", "cp", f"{container}:/data/.", str(destination)],
+        check=True,
+        capture_output=True,
+    )
+    print(f"copied: {sorted(p.name for p in destination.iterdir())}", flush=True)
+
+
+def tool_json(result: Any, label: str) -> Any:
+    """Parse a tool result, showing the raw content when it is not JSON."""
+    if result.is_error:
+        text = result.content[0].text if result.content else "<no content>"
+        raise SystemExit(f"::error::{label} returned an error: {text[:400]}")
+    if not result.content:
+        raise SystemExit(f"::error::{label} returned no content")
+    text = result.content[0].text
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"::error::{label} did not return JSON ({exc}): {text[:400]}"
+        ) from exc
 
 
 async def run(database_path: Path, device_id: str) -> None:
@@ -79,21 +93,18 @@ async def run(database_path: Path, device_id: str) -> None:
                 <= names,
             )
 
-            devices = json.loads((await client.call_tool("list_devices", {})).content[0].text)
+            devices = tool_json(await client.call_tool("list_devices", {}), "list_devices")
             check(
                 "MCP sees the enrolled device",
                 any(d["device_id"] == device_id for d in devices["devices"]),
             )
 
-            timeline = json.loads(
-                (
-                    await client.call_tool(
-                        "get_day_timeline",
-                        {"device_id": device_id, "local_date": "2026-03-15"},
-                    )
-                )
-                .content[0]
-                .text
+            timeline = tool_json(
+                await client.call_tool(
+                    "get_day_timeline",
+                    {"device_id": device_id, "local_date": "2026-03-15"},
+                ),
+                "get_day_timeline",
             )
             check(
                 "MCP returns 24 hour blocks",
@@ -107,37 +118,31 @@ async def run(database_path: Path, device_id: str) -> None:
             )
             check("MCP states the timezone", timeline["timezone"] == "UTC")
 
-            gaps = json.loads(
-                (
-                    await client.call_tool(
-                        "find_data_gaps",
-                        {
-                            "device_id": device_id,
-                            "start_utc": "2026-03-15T00:00:00Z",
-                            "end_utc": "2026-03-16T00:00:00Z",
-                        },
-                    )
-                )
-                .content[0]
-                .text
+            gaps = tool_json(
+                await client.call_tool(
+                    "find_data_gaps",
+                    {
+                        "device_id": device_id,
+                        "start_utc": "2026-03-15T00:00:00Z",
+                        "end_utc": "2026-03-16T00:00:00Z",
+                    },
+                ),
+                "find_data_gaps",
             )
             check("MCP finds exactly one gap", gaps["gap_count"] == 1, gaps)
 
-            location = json.loads(
-                (
-                    await client.call_tool(
-                        "query_phone_events",
-                        {
-                            "device_id": device_id,
-                            "start_utc": "2026-03-15T00:00:00Z",
-                            "end_utc": "2026-03-16T00:00:00Z",
-                            "sources": ["location"],
-                            "limit": 5,
-                        },
-                    )
-                )
-                .content[0]
-                .text
+            location = tool_json(
+                await client.call_tool(
+                    "query_phone_events",
+                    {
+                        "device_id": device_id,
+                        "start_utc": "2026-03-15T00:00:00Z",
+                        "end_utc": "2026-03-16T00:00:00Z",
+                        "sources": ["location"],
+                        "limit": 5,
+                    },
+                ),
+                "query_phone_events",
             )
             redacted = all(
                 e["payload"]["latitude"] == "<redacted by the MCP server>"
@@ -163,13 +168,13 @@ async def run(database_path: Path, device_id: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--volume", required=True, help="Docker volume holding /data")
+    parser.add_argument("--container", required=True, help="running app container")
     parser.add_argument("--device", required=True)
     args = parser.parse_args(argv)
 
     with tempfile.TemporaryDirectory() as tmp:
         destination = Path(tmp)
-        copy_database(args.volume, destination)
+        copy_database(args.container, destination)
         candidates = sorted(destination.glob("*.sqlite3"))
         if not candidates:
             print("::error::no database found in the container volume")
