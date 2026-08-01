@@ -2,20 +2,55 @@
 # shellcheck shell=bash
 #
 # Start the Android Timeline service under s6-overlay.
+#
+# Options are read from /data/options.json directly rather than through
+# `bashio::config`, which talks to the Supervisor API. That API does not
+# exist when the image runs as a plain container -- which is exactly how CI
+# and the local harness run it -- and an empty value there produced an
+# unstartable uvicorn command line.
 set -e
 
-bashio::log.info "Starting Android Timeline..."
+DATA_DIR=/data
+OPTIONS="${DATA_DIR}/options.json"
 
-export ANDROID_TIMELINE_DATA_DIR=/data
+option() {
+    # option <key> <default>
+    local value=""
+    if [ -f "${OPTIONS}" ]; then
+        value="$(jq -r --arg k "$1" '.[$k] // empty' "${OPTIONS}" 2>/dev/null || true)"
+    fi
+    if [ -z "${value}" ] || [ "${value}" = "null" ]; then
+        value="$2"
+    fi
+    printf '%s' "${value}"
+}
+
+RAW_LEVEL="${ANDROID_TIMELINE_LOG_LEVEL:-$(option log_level info)}"
+LEVEL="$(printf '%s' "${RAW_LEVEL}" | tr '[:upper:]' '[:lower:]')"
+
+# Home Assistant's log levels are a superset of uvicorn's.
+case "${LEVEL}" in
+    trace)            UVICORN_LEVEL=trace ;;
+    debug)            UVICORN_LEVEL=debug ;;
+    info|notice)      UVICORN_LEVEL=info ;;
+    warning)          UVICORN_LEVEL=warning ;;
+    error|fatal)      UVICORN_LEVEL=error ;;
+    *)                UVICORN_LEVEL=info ;;
+esac
+
+export ANDROID_TIMELINE_DATA_DIR="${DATA_DIR}"
+ANDROID_TIMELINE_LOG_LEVEL="$(printf '%s' "${UVICORN_LEVEL}" | tr '[:lower:]' '[:upper:]')"
 export ANDROID_TIMELINE_LOG_LEVEL
-ANDROID_TIMELINE_LOG_LEVEL="$(bashio::string.upper "$(bashio::config 'log_level' 'info')")"
 
-# Options are read from /data/options.json by the app itself; only the
-# values that must exist before start-up are exported here.
-if bashio::config.has_value 'admin_token'; then
-    ANDROID_TIMELINE_ADMIN_TOKEN="$(bashio::config 'admin_token')"
-    export ANDROID_TIMELINE_ADMIN_TOKEN
+# The admin token is optional and must never be echoed.
+if [ -z "${ANDROID_TIMELINE_ADMIN_TOKEN:-}" ]; then
+    token="$(option admin_token "")"
+    if [ -n "${token}" ]; then
+        export ANDROID_TIMELINE_ADMIN_TOKEN="${token}"
+    fi
 fi
+
+bashio::log.info "Starting Android Timeline (log level ${UVICORN_LEVEL})..."
 
 cd /opt/android-timeline
 
@@ -24,4 +59,4 @@ exec python3 -m uvicorn app.main:get_app \
     --host 0.0.0.0 \
     --port 8099 \
     --no-server-header \
-    --log-level "$(bashio::config 'log_level' 'info')"
+    --log-level "${UVICORN_LEVEL}"

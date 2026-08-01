@@ -182,7 +182,7 @@ jobs:
           set -euo pipefail
           python -m pip install --quiet pyyaml
           # Only the options block may assign a value; the schema block
-          # legitimately declares dmin_token: password?.
+          # legitimately declares admin_token as an optional password.
           python - <<'PY'
           import pathlib
           import sys
