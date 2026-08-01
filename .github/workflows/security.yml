@@ -123,7 +123,7 @@ jobs:
           tags: android-timeline:scan
 
       - name: Scan with Trivy
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: android-timeline:scan
           format: sarif
@@ -143,7 +143,7 @@ jobs:
       # image, for instance -- are listed in .trivyignore with a reason and
       # a tracking issue, and still appear in the Security tab above.
       - name: Fail on a fixable critical vulnerability
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: android-timeline:scan
           format: table
