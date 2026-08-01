@@ -40,11 +40,8 @@ def copy_database(container: str, destination: Path) -> None:
     """
     # Fixed argv, no shell. `docker` is on the runner PATH by definition:
     # this script only ever runs inside a GitHub Actions job.
-    subprocess.run(  # noqa: S603
-        ["docker", "cp", f"{container}:/data/.", str(destination)],
-        check=True,
-        capture_output=True,
-    )
+    argv = ["docker", "cp", f"{container}:/data/.", str(destination)]
+    subprocess.run(argv, check=True, capture_output=True)  # noqa: S603,S607
     print(f"copied: {sorted(p.name for p in destination.iterdir())}", flush=True)
 
 
