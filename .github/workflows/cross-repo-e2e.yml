@@ -133,12 +133,17 @@ jobs:
           push: false
           tags: android-timeline:e2e
 
-      - name: Install the collector
+      # Both projects ship a top-level package called `android_timeline`.
+      # They are installed into separate virtualenvs so neither can shadow
+      # the other -- the collision is real, and pretending otherwise made
+      # the server scripts import the collector's package.
+      - name: Install the collector into an isolated virtualenv
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install ./collector
-          android-timeline --version
+          python -m venv "${RUNNER_TEMP}/collector-venv"
+          "${RUNNER_TEMP}/collector-venv/bin/pip" install --quiet --upgrade pip
+          "${RUNNER_TEMP}/collector-venv/bin/pip" install --quiet ./collector
+          "${RUNNER_TEMP}/collector-venv/bin/android-timeline" --version
 
       - name: Start the app
         run: |
@@ -182,7 +187,8 @@ jobs:
           set -euo pipefail
           ANDROID_TIMELINE_TOKEN="$(cat "${RUNNER_TEMP}/device-token")"
           export ANDROID_TIMELINE_TOKEN
-          python server/.github/scripts/run_collector_e2e.py \
+          "${RUNNER_TEMP}/collector-venv/bin/python" \
+            server/.github/scripts/run_collector_e2e.py \
             --collector-root collector \
             --base-url http://127.0.0.1:8099 \
             --config "${RUNNER_TEMP}/collector-config.toml"

@@ -237,7 +237,8 @@ class Database:
         return list(self._conn.execute(sql, params).fetchall())
 
     def query_one(self, sql: str, params: Sequence[Any] = ()) -> sqlite3.Row | None:
-        return self._conn.execute(sql, params).fetchone()
+        row: sqlite3.Row | None = self._conn.execute(sql, params).fetchone()
+        return row
 
     # -- migrations ----------------------------------------------------
 
@@ -330,7 +331,7 @@ class Database:
             return stored, duplicate
 
         with self.transaction() as conn:
-            existing = set()
+            existing: set[str] = set()
             ids = [row[0] for row in rows]
             for chunk_start in range(0, len(ids), 500):
                 chunk = ids[chunk_start : chunk_start + 500]

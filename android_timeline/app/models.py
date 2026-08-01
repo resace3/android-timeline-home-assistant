@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import PROTOCOL_VERSION, SUPPORTED_SCHEMA_VERSIONS
+from . import SUPPORTED_SCHEMA_VERSIONS
 
 __all__ = [
     "QUALITY_FLAGS",
@@ -145,7 +145,7 @@ class EventBatch(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal[1] = PROTOCOL_VERSION
+    protocol_version: Literal[1] = 1
     batch_id: IdStr
     device_id: IdStr
     collector_version: str = Field(min_length=1, max_length=64)
@@ -190,7 +190,7 @@ class Acknowledgement(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    protocol_version: Literal[1] = PROTOCOL_VERSION
+    protocol_version: Literal[1] = 1
     batch_id: IdStr
     server_version: str = Field(max_length=64)
     received_time_utc: str

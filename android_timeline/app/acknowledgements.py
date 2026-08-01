@@ -8,8 +8,9 @@ retrying. Getting it wrong loses data silently.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal, cast
 
-from . import PROTOCOL_VERSION, SERVER_VERSION
+from . import SERVER_VERSION
 from .database import Database
 from .models import (
     AcceptedEvent,
@@ -42,7 +43,6 @@ def build_acknowledgement(
     accepted += [AcceptedEvent(event_id=i, status="duplicate") for i in duplicate_ids]
 
     return Acknowledgement(
-        protocol_version=PROTOCOL_VERSION,
         batch_id=batch_id,
         server_version=SERVER_VERSION,
         received_time_utc=received_time_utc or iso_utc(utc_now()),
@@ -73,7 +73,10 @@ def stored_acknowledgement(database: Database, batch_id: str) -> Acknowledgement
         (batch_id,),
     )
     accepted = [
-        AcceptedEvent(event_id=str(r["event_id"]), status=str(r["status"]))
+        AcceptedEvent(
+            event_id=str(r["event_id"]),
+            status=cast("Literal['stored', 'duplicate']", r["status"]),
+        )
         for r in rows
         if r["status"] in ("stored", "duplicate")
     ]
@@ -84,7 +87,6 @@ def stored_acknowledgement(database: Database, batch_id: str) -> Acknowledgement
     ]
 
     return Acknowledgement(
-        protocol_version=PROTOCOL_VERSION,
         batch_id=batch_id,
         server_version=SERVER_VERSION,
         received_time_utc=str(batch["received_at_utc"]),

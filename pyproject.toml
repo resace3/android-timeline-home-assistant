@@ -74,16 +74,11 @@ ignore = ["S101", "S404", "E501"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
-files = ["android_timeline/app", "custom_components"]
-# Home Assistant is not installed in CI for the plain type check; hassfest
-# validates the integration separately.
-[[tool.mypy.overrides]]
-module = ["homeassistant.*", "voluptuous.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "custom_components.*"
-ignore_errors = true
+# Only the service package is type-checked here. The custom integration
+# imports Home Assistant (not installed in this job) and its package is
+# also named android_timeline, which would collide. hassfest and the
+# Home Assistant Core load test in integration.yml cover it instead.
+files = ["android_timeline/app"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

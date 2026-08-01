@@ -53,7 +53,7 @@ class AndroidTimelineSensor(CoordinatorEntity[AndroidTimelineCoordinator], Senso
         self._attr_native_unit_of_measurement = unit
         self._attr_unique_id = f"{DOMAIN}_{device_id}_{key}"
         if device_class:
-            self._attr_device_class = device_class  # type: ignore[assignment]
+            self._attr_device_class = device_class
 
     @property
     def device_info(self) -> DeviceInfo:

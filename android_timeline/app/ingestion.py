@@ -75,6 +75,7 @@ def ingest_batch(database: Database, settings: Settings, batch: EventBatch) -> I
 
     rejected: list[RejectedEvent] = []
     to_store: dict[str, RawEvent] = {}
+    intra_batch_duplicates: list[str] = []
 
     for event in batch.events:
         if event.device_id != batch.device_id:
@@ -92,8 +93,13 @@ def ingest_batch(database: Database, settings: Settings, batch: EventBatch) -> I
             continue
 
         # A batch that repeats an event id internally is not an error; the
-        # second copy is simply the same observation.
-        to_store.setdefault(event.event_id, event)
+        # second copy is simply the same observation. It still needs its own
+        # verdict, though -- every event in the request gets one, or the
+        # collector cannot tell what the server actually holds.
+        if event.event_id in to_store:
+            intra_batch_duplicates.append(event.event_id)
+        else:
+            to_store[event.event_id] = event
 
     rows = [
         (
@@ -115,6 +121,9 @@ def ingest_batch(database: Database, settings: Settings, batch: EventBatch) -> I
     ]
 
     stored_ids, duplicate_ids = database.store_events(rows, batch.batch_id)
+    # Repeats within this request are duplicates too, from the client's
+    # point of view: the server holds the event, so stop sending it.
+    duplicate_ids = [*duplicate_ids, *intra_batch_duplicates]
 
     # Heartbeats are also raw events; they are additionally projected into
     # their own table so coverage can ask "was the collector alive?" without

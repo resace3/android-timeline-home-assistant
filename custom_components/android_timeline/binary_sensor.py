@@ -49,7 +49,7 @@ class AndroidTimelineBinarySensor(
         self._key = key
         self._attr_name = name
         self._attr_icon = icon
-        self._attr_device_class = device_class  # type: ignore[assignment]
+        self._attr_device_class = device_class
         self._attr_unique_id = f"{DOMAIN}_{device_id}_{key}"
 
     @property
