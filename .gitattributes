@@ -1,0 +1,11 @@
+# s6 service scripts and shell must keep LF or the container will not boot.
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+android_timeline/rootfs/** text eol=lf
+Dockerfile text eol=lf
+*.png binary

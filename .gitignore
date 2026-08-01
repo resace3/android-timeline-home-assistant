@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Runtime state and credentials must never be committed.
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+data/
+token_pepper
+options.json
+secrets/
