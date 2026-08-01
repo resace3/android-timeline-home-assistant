@@ -26,6 +26,16 @@ def device_headers(token: str, batch_id: str = "batch-test-0001") -> dict[str, s
     }
 
 
+def unique(events: list[dict[str, Any]]) -> int:
+    """How many distinct events a slice contains.
+
+    The synthetic day deliberately repeats one event, and after sorting the
+    repeat lands near the front, so a slice of N events is not N distinct
+    observations.
+    """
+    return len({e["event_id"] for e in events})
+
+
 def make_body(
     events: list[dict[str, Any]], batch_id: str = "batch-test-0001"
 ) -> dict[str, Any]:
