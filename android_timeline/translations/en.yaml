@@ -1,0 +1,58 @@
+configuration:
+  log_level:
+    name: Log level
+    description: >-
+      How much detail the app logs. Credentials are never logged at any
+      level.
+  timezone:
+    name: Timezone
+    description: >-
+      IANA timezone used to decide where a day starts and ends, for example
+      Europe/London. Events are always stored in UTC; this only affects
+      daily features and the timeline. Falls back to UTC if unrecognised.
+  features_enabled:
+    name: Compute derived features
+    description: >-
+      Compute hourly and daily features from raw events. Turning this off
+      stops the pipeline but never deletes anything; features can be
+      recomputed later.
+  publish_entities:
+    name: Publish Home Assistant entities
+    description: >-
+      Publish a small set of summary sensors. Only aggregates are published,
+      never one entity per raw event.
+  mcp_enabled:
+    name: Enable the MCP server
+    description: >-
+      Serve a read-only MCP endpoint for Claude and other MCP clients. It is
+      reachable through ingress only and cannot modify any data.
+  trust_ingress_admin:
+    name: Treat ingress requests as admin
+    description: >-
+      Home Assistant authenticates the user before proxying an ingress
+      request, so an ingress request is treated as an administrator. Leave
+      this on unless you have exposed a port, in which case set an admin
+      token and turn it off.
+  admin_token:
+    name: Admin token
+    description: >-
+      Optional. Only needed to reach the API or MCP endpoint without going
+      through ingress. Leave empty if you do not need it.
+  retention_enabled:
+    name: Delete old raw events
+    description: >-
+      Off by default. Raw events are the ground truth for every derived
+      feature, so deleting them makes past analyses unreproducible.
+  retention_days:
+    name: Retention period (days)
+    description: >-
+      How long raw events are kept when retention is enabled. Ignored
+      otherwise.
+  max_batch_events:
+    name: Maximum events per upload
+    description: Largest batch a device may send in one request.
+  rate_limit_requests:
+    name: Requests per minute per device
+    description: >-
+      Upper bound on how often one device may call the API. Guards against a
+      looping client, not against an attacker.

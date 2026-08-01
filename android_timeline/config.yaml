@@ -1,0 +1,69 @@
+# https://developers.home-assistant.io/docs/add-ons/configuration
+name: Android Timeline
+version: "0.1.0"
+slug: android_timeline
+description: >-
+  Ingestion API, event store, feature engineering and a read-only MCP server
+  for Android device data collected by the android-timeline-termux collector.
+  Experimental.
+url: "https://github.com/resace3/android-timeline-home-assistant"
+image: "ghcr.io/resace3/android-timeline"
+
+arch:
+  - amd64
+  - aarch64
+
+# s6-overlay v3 provides init, so Docker's own must stay out of the way.
+init: false
+startup: services
+boot: auto
+
+# Ingress only. No port is published, which is what makes it safe to treat
+# an ingress request as an authenticated admin: Supervisor authenticates the
+# Home Assistant user before the request ever reaches this app.
+ingress: true
+ingress_port: 8099
+ingress_entry: "/"
+panel_icon: mdi:cellphone-link
+panel_title: Android Timeline
+panel_admin: true
+
+# The Home Assistant API proxy is used to publish a handful of summary
+# entities. No Supervisor role is requested: this app has no business
+# managing other apps, backups or the host.
+homeassistant_api: true
+hassio_api: false
+
+# No directory mapping. Everything persistent lives in the app's own /data
+# volume, so no Home Assistant configuration or media is exposed.
+
+apparmor: true
+watchdog: "http://[HOST]:[PORT:8099]/api/v1/health"
+backup: hot
+
+options:
+  log_level: info
+  timezone: UTC
+  features_enabled: true
+  publish_entities: true
+  mcp_enabled: true
+  trust_ingress_admin: true
+  retention_enabled: false
+  retention_days: 0
+  max_batch_events: 1000
+  rate_limit_requests: 120
+
+schema:
+  log_level: list(trace|debug|info|notice|warning|error|fatal)
+  timezone: str
+  features_enabled: bool
+  publish_entities: bool
+  mcp_enabled: bool
+  # Leave true unless you publish a port. See docs/security.md.
+  trust_ingress_admin: bool
+  # Optional. Only needed to reach the API without going through ingress.
+  admin_token: password?
+  retention_enabled: bool
+  retention_days: int(0,3650)
+  max_batch_events: int(1,1000)
+  rate_limit_requests: int(1,10000)

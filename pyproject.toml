@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "android-timeline-home-assistant"
+version = "0.1.0"
+description = "Home Assistant app: ingestion, feature engineering and a read-only MCP server for Android Timeline data"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "resace3" }]
+
+# Mirrors android_timeline/requirements.txt, which is what the container
+# actually installs. A test asserts the two agree.
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.52.0",
+  "pydantic==2.13.4",
+  "httpx==0.28.1",
+  "mcp==2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=1.0",
+  "pytest-cov>=6.0",
+  "jsonschema>=4.23",
+  "mypy>=1.13",
+  "ruff>=0.8",
+  "types-PyYAML",
+  "PyYAML",
+]
+
+[project.urls]
+Homepage = "https://github.com/resace3/android-timeline-home-assistant"
+Collector = "https://github.com/resace3/android-timeline-termux"
+Issues = "https://github.com/resace3/android-timeline-home-assistant/issues"
+
+# This repository is an app, not a library. Only the service package is
+# installable; `schemas/` and `custom_components/` are data and a Home
+# Assistant integration respectively, and must not be picked up as
+# top-level packages by build-backend auto-discovery.
+[tool.hatch.build.targets.wheel]
+packages = ["android_timeline"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/android_timeline",
+  "/custom_components",
+  "/schemas",
+  "/tests",
+  "/docs",
+  "/repository.yaml",
+  "/README.md",
+  "/LICENSE",
+]
+
+[tool.ruff]
+line-length = 95
+target-version = "py312"
+extend-exclude = ["custom_components/android_timeline/translations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "PTH", "RUF", "S"]
+ignore = ["S101", "S404", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S311", "N802", "S104"]
+"test-harness/**" = ["S104", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+# Only the service package is type-checked here. The custom integration
+# imports Home Assistant (not installed in this job) and its package is
+# also named android_timeline, which would collide. hassfest and the
+# Home Assistant Core load test in integration.yml cover it instead.
+files = ["android_timeline/app"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+asyncio_mode = "auto"
+markers = [
+  "integration: exercises the app over HTTP",
+  "contract: asserts cross-repository protocol compatibility",
+  "e2e: end-to-end through the full pipeline",
+]
+filterwarnings = ["error", "ignore::ResourceWarning", "ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["android_timeline/app"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+]

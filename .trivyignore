@@ -1,0 +1,19 @@
+# Vulnerabilities acknowledged but not fixable in this repository.
+#
+# Each entry must name the component, say why it cannot be fixed here, and
+# link a tracking issue. Nothing goes in this file to make a build green.
+# The full scan result is still uploaded to the Security tab, so an ignored
+# finding stays visible.
+
+# CVE-2025-68121 -- crypto/tls certificate validation, Go stdlib v1.23.3.
+#
+# The affected binary is shipped inside ghcr.io/home-assistant/base-python,
+# Home Assistant's own base image. This repository adds no Go code and
+# cannot rebuild that binary; the fix has to come from an upstream base
+# image rebuild, which Dependabot will bring in.
+#
+# Nothing in this app reaches that binary at runtime: the service is Python,
+# and its TLS is CPython's, not Go's.
+#
+# Tracked in: https://github.com/resace3/android-timeline-home-assistant/issues/2
+CVE-2025-68121

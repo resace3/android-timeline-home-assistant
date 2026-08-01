@@ -1,0 +1,148 @@
+# Multi-architecture app image build.
+#
+# Uses the CURRENT official Home Assistant builder actions. The legacy
+# `home-assistant/builder@master` action is deprecated and prints a warning;
+# it has been superseded by these composite actions, which delegate to the
+# runner's own Docker BuildKit. There is deliberately no build.yaml: the
+# base image, build arguments and labels live in the Dockerfile now.
+name: Build app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android_timeline/**"
+      - ".github/workflows/build-app.yml"
+  pull_request:
+    paths:
+      - "android_timeline/**"
+      - ".github/workflows/build-app.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the built images to GHCR
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      architectures: ${{ steps.info.outputs.architectures }}
+      build_matrix: ${{ steps.matrix.outputs.matrix }}
+      image_name: ${{ steps.normalize.outputs.image_name }}
+      registry_prefix: ${{ steps.normalize.outputs.registry_prefix }}
+      version: ${{ steps.normalize.outputs.version }}
+      name: ${{ steps.normalize.outputs.name }}
+      description: ${{ steps.normalize.outputs.description }}
+      publish: ${{ steps.normalize.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Get app information
+        id: info
+        uses: home-assistant/actions/helpers/info@master
+        with:
+          path: "./android_timeline"
+
+      - name: Normalize app information
+        id: normalize
+        env:
+          IMAGE: ${{ steps.info.outputs.image }}
+          VERSION: ${{ steps.info.outputs.version }}
+          NAME: ${{ steps.info.outputs.name }}
+          DESCRIPTION: ${{ steps.info.outputs.description }}
+        run: |
+          set -euo pipefail
+          # helpers/info emits JSON-encoded scalars, so every value arrives
+          # wrapped in literal double quotes. They must come off before the
+          # values reach a Docker tag, or buildx rejects the reference.
+          unquote() { printf '%s' "$1" | sed -e 's/^"//' -e 's/"$//'; }
+          image=$(unquote "${IMAGE}")
+          echo "image_name=${image##*/}" >> "$GITHUB_OUTPUT"
+          echo "registry_prefix=${image%/*}" >> "$GITHUB_OUTPUT"
+          echo "version=$(unquote "${VERSION}")" >> "$GITHUB_OUTPUT"
+          echo "name=$(unquote "${NAME}")" >> "$GITHUB_OUTPUT"
+          echo "description=$(unquote "${DESCRIPTION}")" >> "$GITHUB_OUTPUT"
+          # Publish only on a release, or when asked explicitly. Pull
+          # requests build without pushing so a fork can never publish.
+          if [ "${{ github.event_name }}" = "release" ] || \
+             [ "${{ inputs.publish }}" = "true" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.06.0
+        with:
+          architectures: ${{ steps.info.outputs.architectures }}
+          image-name: ${{ steps.normalize.outputs.image_name }}
+          registry-prefix: ${{ steps.normalize.outputs.registry_prefix }}
+
+  build:
+    name: Build ${{ matrix.arch }} image
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        uses: home-assistant/builder/actions/build-image@2026.06.0
+        with:
+          arch: ${{ matrix.arch }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: "./android_timeline"
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          labels: |
+            io.hass.type=app
+            io.hass.name=${{ needs.prepare.outputs.name }}
+            io.hass.description=${{ needs.prepare.outputs.description }}
+            io.hass.url=https://github.com/resace3/android-timeline-home-assistant
+          push: ${{ needs.prepare.outputs.publish == 'true' }}
+          version: ${{ needs.prepare.outputs.version }}
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [prepare, build]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.06.0
+        with:
+          architectures: ${{ needs.prepare.outputs.architectures }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image-name: ${{ needs.prepare.outputs.image_name }}
+          image-tags: |
+            ${{ needs.prepare.outputs.version }}
+            latest
+          registry-prefix: ${{ needs.prepare.outputs.registry_prefix }}

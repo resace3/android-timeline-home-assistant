@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://resace3.github.io/android-timeline/schemas/acknowledgement.schema.json",
+  "title": "Android Timeline batch acknowledgement",
+  "description": "The response body of POST /api/v1/events/batch. Acknowledgement is per event, not per batch: the collector may only mark an event uploaded if that event id appears in `accepted`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "batch_id", "received_time_utc", "accepted", "rejected", "counts"],
+  "properties": {
+    "protocol_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+    },
+    "server_version": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "received_time_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"
+    },
+    "accepted": {
+      "type": "array",
+      "description": "Events the server now holds. `duplicate` means it already had the event -- the collector must treat that as success, which is what makes retries safe.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "status"],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["stored", "duplicate"]
+          }
+        }
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "description": "Events the server refused. The collector keeps them locally and stops retrying after the configured attempt limit.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "reason"],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["received", "stored", "duplicate", "rejected"],
+      "properties": {
+        "received": { "type": "integer", "minimum": 0 },
+        "stored": { "type": "integer", "minimum": 0 },
+        "duplicate": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

@@ -1,0 +1,179 @@
+# Layered integration testing.
+#
+# Layer A (required): the app as an ordinary container -- ingestion,
+#   database, feature pipeline, MCP.
+# Layer B (required): narrow mock Supervisor / Home Assistant APIs, so the
+#   contract with Home Assistant is asserted without pretending to be it.
+# Layer C (non-blocking): a real Home Assistant Core container loading the
+#   custom integration.
+#
+# There is deliberately no Supervisor-in-CI layer: it needs privileged
+# Docker-in-Docker and a full OS image, which is unreliable enough that a
+# green result would not mean much. docs/testing.md says so plainly.
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  container:
+    name: "Layer A: app container"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build the app image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: ./android_timeline
+          load: true
+          push: false
+          tags: android-timeline:test
+
+      - name: Start the app with a temporary volume
+        run: |
+          set -euo pipefail
+          docker volume create atl-data
+          docker run -d --name atl -p 8099:8099 \
+            -v atl-data:/data \
+            -e ANDROID_TIMELINE_ADMIN_TOKEN=synthetic-ci-admin-token \
+            -e ANDROID_TIMELINE_TIMEZONE=UTC \
+            android-timeline:test
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8099/api/v1/health >/dev/null && break
+            sleep 2
+          done
+
+      - name: Install the test client
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Drive the running container through the whole pipeline
+        run: python .github/scripts/drive_container.py --base-url http://127.0.0.1:8099
+
+      - name: Restart the container and confirm the data survived
+        run: |
+          set -euo pipefail
+          before=$(curl -sf http://127.0.0.1:8099/api/v1/health | python -c 'import json,sys;print(json.load(sys.stdin)["device_count"])')
+          docker restart atl
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8099/api/v1/health >/dev/null && break
+            sleep 2
+          done
+          python .github/scripts/drive_container.py \
+            --base-url http://127.0.0.1:8099 --verify-only
+          after=$(curl -sf http://127.0.0.1:8099/api/v1/health | python -c 'import json,sys;print(json.load(sys.stdin)["device_count"])')
+          [ "$before" = "$after" ]
+          echo "device count survived restart: ${after}"
+
+      - name: No credential appears in the container log
+        if: always()
+        run: |
+          set -euo pipefail
+          docker logs atl > /tmp/atl.log 2>&1 || true
+          if grep -qiE 'atl_[A-Za-z0-9_-]{20,}|synthetic-ci-admin-token' /tmp/atl.log; then
+            echo '::error::a token appears in the container log'
+            exit 1
+          fi
+          echo 'container log is clean'
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f atl || true
+          docker volume rm atl-data || true
+
+  mock-supervisor:
+    name: "Layer B: mock Supervisor contract"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # A narrow mock implementing only /core/api/states/{entity_id} --
+      # the single Supervisor endpoint this app calls. Building a fake
+      # Home Assistant would prove nothing.
+      - name: Contract test against the mock Supervisor
+        run: pytest test-harness/mock-supervisor -v
+
+  home-assistant-core:
+    name: "Layer C: Home Assistant Core (non-blocking)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start Home Assistant Core with the custom integration
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ha-config/custom_components
+          cp -r custom_components/android_timeline /tmp/ha-config/custom_components/
+          cat > /tmp/ha-config/configuration.yaml <<'YAML'
+          default_config:
+          logger:
+            default: warning
+            logs:
+              custom_components.android_timeline: debug
+          YAML
+
+          docker run -d --name hass \
+            -v /tmp/ha-config:/config \
+            --network host \
+            ghcr.io/home-assistant/home-assistant:2026.7.4
+
+          for _ in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8123/ >/dev/null 2>&1; then break; fi
+            sleep 5
+          done
+
+      - name: The integration loads without an import error
+        run: |
+          set -euo pipefail
+          sleep 30
+          docker logs hass 2>&1 | tee /tmp/hass.log | tail -40
+          if grep -iE "Error .*android_timeline|Unable to import.*android_timeline|Setup failed for.*android_timeline" /tmp/hass.log; then
+            echo '::error::the custom integration failed to load'
+            exit 1
+          fi
+          echo 'custom integration loaded cleanly'
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: failure()
+        with:
+          name: home-assistant-logs
+          path: /tmp/hass.log
+          retention-days: 3
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f hass || true

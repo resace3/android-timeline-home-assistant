@@ -1,0 +1,267 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Format, lint and type check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Ruff format check
+        run: ruff format --check --diff .
+      - name: Ruff lint
+        run: ruff check --output-format=github .
+      - name: Mypy
+        run: mypy
+
+  test:
+    name: Tests (python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Unit tests (database, auth, features, coverage)
+        run: pytest tests/unit -v
+
+      - name: API and MCP tests
+        run: pytest tests/integration -v
+
+      - name: Protocol contract tests
+        run: pytest tests/contract -v
+
+      - name: End-to-end pipeline
+        run: pytest tests/e2e -v
+
+      - name: Full suite with coverage
+        run: pytest --cov --cov-report=xml --cov-report=term
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: matrix.python-version == '3.13'
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 7
+
+  hassfest:
+    name: Home Assistant integration validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # The current official validator for custom integrations.
+      - uses: home-assistant/actions/hassfest@master
+
+  app-config:
+    name: App configuration validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same helper the official builder workflow uses. It fails if a
+      # required config.yaml option is missing or malformed.
+      - name: Validate config.yaml
+        id: info
+        uses: home-assistant/actions/helpers/info@master
+        with:
+          path: "./android_timeline"
+
+      - name: Report what was parsed
+        run: |
+          echo "slug=${{ steps.info.outputs.slug }}"
+          echo "version=${{ steps.info.outputs.version }}"
+          echo "image=${{ steps.info.outputs.image }}"
+          echo "architectures=${{ steps.info.outputs.architectures }}"
+
+      - name: repository.yaml must exist and name the repository
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib
+          import sys
+
+          import yaml
+
+          data = yaml.safe_load(pathlib.Path("repository.yaml").read_text())
+          if not isinstance(data, dict) or not data.get("name"):
+              print("::error::repository.yaml must define a name")
+              sys.exit(1)
+          print("repository:", data["name"])
+          PY
+
+      - name: The app version must match the Python package version
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import pathlib
+          import sys
+          import tomllib
+
+          import yaml
+
+          config = yaml.safe_load(pathlib.Path("android_timeline/config.yaml").read_text())
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          app_version = str(config["version"])
+          py_version = project["project"]["version"]
+          if app_version != py_version:
+              print(f"::error::config.yaml {app_version} != pyproject {py_version}")
+              sys.exit(1)
+          print("versions agree:", app_version)
+          PY
+
+  container:
+    name: Container build smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4.2.0
+
+      # A plain amd64 build, loaded locally. The multi-arch, signed,
+      # published build lives in build-app.yml.
+      - name: Build the app image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: ./android_timeline
+          load: true
+          push: false
+          tags: android-timeline:ci
+          build-args: |
+            BUILD_VERSION=ci
+
+      - name: The image starts and answers its health endpoint
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/atl-data
+          docker run -d --name atl \
+            -p 8099:8099 \
+            -v /tmp/atl-data:/data \
+            -e ANDROID_TIMELINE_ADMIN_TOKEN=synthetic-ci-admin-token \
+            android-timeline:ci
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8099/api/v1/health >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8099/api/v1/health | tee /tmp/health.json
+          echo
+          python -c "import json;d=json.load(open('/tmp/health.json'));assert d['status']=='ok';print('health ok')"
+
+      - name: The container does not run the service as root
+        run: |
+          set -euo pipefail
+          # Home Assistant base images run s6 as root by design, but the
+          # service itself should not need root privileges to work. This
+          # records what actually happens rather than asserting a wish.
+          docker exec atl sh -c 'ps -o user,comm 2>/dev/null || ps' | head -20
+
+      - name: Container logs contain no credential
+        if: always()
+        run: |
+          set -euo pipefail
+          docker logs atl > /tmp/atl.log 2>&1 || true
+          if grep -qiE 'atl_[A-Za-z0-9_-]{20,}|synthetic-ci-admin-token' /tmp/atl.log; then
+            echo '::error::a token appears in the container log'
+            exit 1
+          fi
+          echo 'no credentials in container logs'
+          tail -20 /tmp/atl.log
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f atl || true
+
+  no-secrets:
+    name: No secrets or personal data
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan the tree for credential-shaped strings
+        run: |
+          set -euo pipefail
+          patterns=(
+            'gh[pousr]_[A-Za-z0-9]{36,}'
+            'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.'
+            '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+            '\.ui\.nabu\.casa'
+            'AKIA[0-9A-Z]{16}'
+          )
+          failed=0
+          for pattern in "${patterns[@]}"; do
+            if grep -rInE --exclude-dir=.git --exclude-dir=.github -e "${pattern}" .; then
+              echo "::error::credential-shaped string matching /${pattern}/"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Fixtures use reserved identifiers only
+        run: |
+          set -euo pipefail
+          grep -rIn 'device-test-001' tests/ >/dev/null
+          if grep -rInP '\+1-(?!555-01)[0-9]' tests/ 2>/dev/null; then
+            echo '::error::a non-fictional phone number appears in tests/'
+            exit 1
+          fi
+          echo 'fixtures are synthetic'
+
+  ci-required:
+    name: CI required checks
+    runs-on: ubuntu-24.04
+    needs: [lint, test, hassfest, app-config, container, no-secrets]
+    if: always()
+    steps:
+      - name: Fail if any required job failed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "job results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            if [ "${result}" != "success" ]; then
+              echo "::error::a required CI job reported '${result}'"
+              exit 1
+            fi
+          done
+          echo 'all required CI jobs succeeded'
