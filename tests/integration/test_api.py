@@ -232,7 +232,7 @@ class TestIngestion:
         headers["Content-Encoding"] = "gzip"
         response = client.post(BATCH_PATH, content=body, headers=headers)
         assert response.status_code == 200
-        assert response.json()["counts"]["stored"] == 10
+        assert response.json()["counts"]["stored"] == unique(synthetic_day["events"][:10])
 
     def test_a_device_cannot_upload_for_another_device(
         self, enrolled_client: tuple[TestClient, str], synthetic_day: dict[str, Any]
@@ -266,9 +266,11 @@ class TestIdempotency:
         first = client.post(BATCH_PATH, json=body, headers=device_headers(token)).json()
         second = client.post(BATCH_PATH, json=body, headers=device_headers(token)).json()
 
-        assert first["counts"]["stored"] == 15
+        events = synthetic_day["events"][:15]
+        assert first["counts"]["stored"] == unique(events)
         assert second["counts"]["stored"] == 0
-        assert second["counts"]["duplicate"] == 15
+        # Every event in the request gets a verdict, duplicates included.
+        assert second["counts"]["duplicate"] == len(events)
         assert all(a["status"] == "duplicate" for a in second["accepted"])
 
     def test_same_events_under_a_new_batch_id(
@@ -287,7 +289,7 @@ class TestIdempotency:
             headers=device_headers(token, "batch-test-bbbb"),
         ).json()
 
-        assert second["counts"]["duplicate"] == 15
+        assert second["counts"]["duplicate"] == len(events)
         assert second["counts"]["stored"] == 0
 
 
@@ -306,7 +308,7 @@ class TestDeviceStatus:
             headers={"Authorization": f"Bearer {token}", "X-Device-ID": DEVICE},
         ).json()
         assert body["device_id"] == DEVICE
-        assert body["total_events"] == 10
+        assert body["total_events"] == unique(synthetic_day["events"][:10])
         assert "token" not in json.dumps(body).lower()
 
     def test_a_device_cannot_read_another_devices_status(
