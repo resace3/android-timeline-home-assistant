@@ -3,7 +3,7 @@
 # There is no build.yaml: the legacy home-assistant/builder is retired, and
 # the base image, build arguments and labels now live here so the image can
 # be built by Docker BuildKit directly.
-ARG BUILD_FROM=ghcr.io/home-assistant/base-python:3.13-alpine3.23-2026.06.1
+ARG BUILD_FROM=ghcr.io/home-assistant/base-python:3.13-alpine3.24-2026.06.1
 FROM ${BUILD_FROM}
 
 ARG TARGETARCH
