@@ -1,0 +1,12 @@
+{
+  "domain": "android_timeline",
+  "name": "Android Timeline",
+  "codeowners": ["@resace3"],
+  "config_flow": true,
+  "documentation": "https://github.com/resace3/android-timeline-home-assistant",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/resace3/android-timeline-home-assistant/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

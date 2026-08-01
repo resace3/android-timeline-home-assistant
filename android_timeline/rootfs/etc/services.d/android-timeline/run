@@ -1,0 +1,27 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+#
+# Start the Android Timeline service under s6-overlay.
+set -e
+
+bashio::log.info "Starting Android Timeline..."
+
+export ANDROID_TIMELINE_DATA_DIR=/data
+export ANDROID_TIMELINE_LOG_LEVEL
+ANDROID_TIMELINE_LOG_LEVEL="$(bashio::string.upper "$(bashio::config 'log_level' 'info')")"
+
+# Options are read from /data/options.json by the app itself; only the
+# values that must exist before start-up are exported here.
+if bashio::config.has_value 'admin_token'; then
+    ANDROID_TIMELINE_ADMIN_TOKEN="$(bashio::config 'admin_token')"
+    export ANDROID_TIMELINE_ADMIN_TOKEN
+fi
+
+cd /opt/android-timeline
+
+exec python3 -m uvicorn app.main:get_app \
+    --factory \
+    --host 0.0.0.0 \
+    --port 8099 \
+    --no-server-header \
+    --log-level "$(bashio::config 'log_level' 'info')"

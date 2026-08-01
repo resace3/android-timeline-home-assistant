@@ -1,0 +1,148 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Re-verify before releasing
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+
+      # Never release on the strength of an older green run.
+      - name: Install and test the tagged tree
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          ruff format --check .
+          ruff check .
+          mypy
+          pytest -q
+
+      - name: The tag must match every declared version
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import pathlib
+          import sys
+          import tomllib
+
+          import yaml
+
+          tag = os.environ["TAG"]
+          config = yaml.safe_load(pathlib.Path("android_timeline/config.yaml").read_text())
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          manifest = __import__("json").loads(
+              pathlib.Path("custom_components/android_timeline/manifest.json").read_text()
+          )
+
+          versions = {
+              "config.yaml": str(config["version"]),
+              "pyproject.toml": project["project"]["version"],
+              "manifest.json": manifest["version"],
+          }
+          expected = tag.lstrip("v")
+          bad = {k: v for k, v in versions.items() if v != expected}
+          if bad:
+              print(f"::error::tag {tag} does not match: {bad}")
+              sys.exit(1)
+          print("every version matches", expected)
+          PY
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+
+  release:
+    name: Create the release
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Assemble release artifacts
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          mkdir -p release
+          tar -czf "release/android-timeline-app-${version}.tar.gz" \
+            android_timeline repository.yaml schemas README.md LICENSE SECURITY.md
+          tar -czf "release/android-timeline-integration-${version}.tar.gz" \
+            -C custom_components android_timeline
+          cp -r schemas "release/schemas"
+          tar -czf "release/protocol-schemas-${version}.tar.gz" -C release schemas
+          rm -rf release/schemas
+          cd release
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+
+      - name: Generate build provenance attestations
+        uses: actions/attest-build-provenance@v4.1.1
+        with:
+          subject-path: "release/*.tar.gz"
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes=$(cat <<'NOTES'
+          ## Android Timeline Home Assistant app
+
+          Experimental. The server side is validated in CI end to end
+          against the real Termux collector, but no physical Android device
+          has ever fed it -- see `docs/testing.md`.
+
+          ### Install
+
+          Add this repository to Home Assistant:
+          **Settings -> Apps -> App store -> Repositories**, then paste
+          `https://github.com/resace3/android-timeline-home-assistant`.
+
+          ### Artifacts
+
+          | File | Contents |
+          | --- | --- |
+          | `android-timeline-app-*.tar.gz` | the app directory and repository.yaml |
+          | `android-timeline-integration-*.tar.gz` | the optional custom integration |
+          | `protocol-schemas-*.tar.gz` | the versioned protocol schemas |
+          | `SHA256SUMS` | checksums for every artifact |
+
+          Container images are published to
+          `ghcr.io/resace3/android-timeline` by the build-app workflow.
+
+          ### Protocol
+
+          `protocol_version` 1. The matching collector is
+          [`android-timeline-termux`](https://github.com/resace3/android-timeline-termux).
+          NOTES
+          )
+          gh release create "${TAG}" release/* \
+            --title "${TAG}" --notes "${notes}" --verify-tag

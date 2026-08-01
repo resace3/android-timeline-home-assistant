@@ -1,0 +1,4 @@
+# https://developers.home-assistant.io/docs/add-ons/repository
+name: Android Timeline
+url: "https://github.com/resace3/android-timeline-home-assistant"
+maintainer: resace3 <https://github.com/resace3>

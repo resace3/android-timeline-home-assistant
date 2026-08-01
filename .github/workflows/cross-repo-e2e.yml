@@ -1,0 +1,261 @@
+# The most important workflow in either repository.
+#
+# It runs the REAL collector from resace3/android-timeline-termux against
+# the REAL app image built from this repository, entirely on GitHub-hosted
+# runners. Nothing is mocked between them: the collector writes to its own
+# SQLite outbox and uploads over HTTP; the app authenticates, stores,
+# deduplicates, acknowledges and derives features.
+#
+#   Synthetic collector  ->  SQLite outbox  ->  authenticated batch upload
+#         -> app container -> event store -> features -> MCP -> assertions
+#
+# The collector revision is pinned by input (default: a released tag) so a
+# release is never validated against an unknown moving revision.
+name: Cross-repository end-to-end
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+    inputs:
+      collector-ref:
+        description: Tag, branch or commit SHA of android-timeline-termux
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-repo-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COLLECTOR_REPO: resace3/android-timeline-termux
+  DEVICE_ID: device-test-001
+  ADMIN_TOKEN: synthetic-ci-admin-token
+
+jobs:
+  e2e:
+    name: Collector -> app -> MCP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the server (this repository)
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          path: server
+
+      - name: Resolve the collector revision
+        id: collector
+        run: |
+          set -euo pipefail
+          # Explicit input wins. Otherwise use the newest release tag, and
+          # fall back to main only when no release exists yet.
+          ref="${{ inputs.collector-ref }}"
+          if [ -z "${ref}" ]; then
+            ref=$(git ls-remote --tags --refs --sort=-v:refname \
+                    "https://github.com/${COLLECTOR_REPO}" 'v*' \
+                  | head -n1 | sed 's#.*refs/tags/##')
+          fi
+          if [ -z "${ref}" ]; then
+            ref=main
+            echo "::warning::no collector release tag found; using main. A release must not be validated against a moving revision."
+          fi
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "Collector revision: ${ref}"
+
+      - name: Check out the collector
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          repository: ${{ env.COLLECTOR_REPO }}
+          ref: ${{ steps.collector.outputs.ref }}
+          path: collector
+
+      - name: Record the exact revisions under test
+        run: |
+          set -euo pipefail
+          {
+            echo "## Revisions under test"
+            echo
+            echo "| Repository | Ref | SHA |"
+            echo "| --- | --- | --- |"
+            echo "| server (this) | ${{ github.ref_name }} | $(git -C server rev-parse HEAD) |"
+            echo "| collector | ${{ steps.collector.outputs.ref }} | $(git -C collector rev-parse HEAD) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------------------
+      # The protocol must be byte-identical on both sides.
+      # ------------------------------------------------------------------
+      - name: Protocol schemas must match exactly
+        run: |
+          set -euo pipefail
+          failed=0
+          for schema in event batch acknowledgement; do
+            if diff -u "server/schemas/${schema}.schema.json" \
+                       "collector/schemas/${schema}.schema.json"; then
+              echo "  ${schema}.schema.json matches"
+            else
+              echo "::error::${schema}.schema.json differs between the repositories"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+      - name: Protocol versions must agree
+        run: |
+          set -euo pipefail
+          server=$(grep -oP 'PROTOCOL_VERSION\s*=\s*\K[0-9]+' \
+                    server/android_timeline/app/__init__.py | head -1)
+          client=$(grep -oP 'PROTOCOL_VERSION\s*=\s*\K[0-9]+' \
+                    collector/android_timeline/__init__.py | head -1)
+          echo "server=${server} collector=${client}"
+          [ "${server}" = "${client}" ]
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.13"
+
+      - uses: docker/setup-buildx-action@v4.2.0
+
+      - name: Build the app image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: ./server/android_timeline
+          load: true
+          push: false
+          tags: android-timeline:e2e
+
+      - name: Install the collector
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install ./collector
+          android-timeline --version
+
+      - name: Start the app
+        run: |
+          set -euo pipefail
+          docker volume create atl-e2e
+          docker run -d --name atl -p 8099:8099 \
+            -v atl-e2e:/data \
+            -e ANDROID_TIMELINE_ADMIN_TOKEN="${ADMIN_TOKEN}" \
+            -e ANDROID_TIMELINE_TIMEZONE=UTC \
+            android-timeline:e2e
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8099/api/v1/health >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:8099/api/v1/health
+
+      - name: Enroll the synthetic device
+        id: enroll
+        run: |
+          set -euo pipefail
+          response=$(curl -sf -X POST http://127.0.0.1:8099/api/v1/admin/devices \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"device_id\": \"${DEVICE_ID}\"}")
+          token=$(echo "${response}" | python -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          # Written to a file rather than an output so it is never rendered
+          # in the workflow log or the run summary.
+          umask 077
+          printf '%s' "${token}" > "${RUNNER_TEMP}/device-token"
+          echo "enrolled"
+
+      # ------------------------------------------------------------------
+      # The collector, driven for real: its own outbox, its own uploader.
+      # ------------------------------------------------------------------
+      - name: Run the collector end to end
+        env:
+          ANDROID_TIMELINE_HOME: ${{ runner.temp }}/collector-data
+          ANDROID_TIMELINE_SALT: synthetic-ci-salt
+          ANDROID_TIMELINE_INSECURE_TEST_MODE: yes-i-am-running-an-automated-test
+        run: |
+          set -euo pipefail
+          ANDROID_TIMELINE_TOKEN="$(cat "${RUNNER_TEMP}/device-token")"
+          export ANDROID_TIMELINE_TOKEN
+          python server/.github/scripts/run_collector_e2e.py \
+            --collector-root collector \
+            --base-url http://127.0.0.1:8099 \
+            --config "${RUNNER_TEMP}/collector-config.toml"
+
+      - name: Assert the server's view of the same day
+        run: |
+          set -euo pipefail
+          cd server
+          python -m pip install -e ".[dev]"
+          python .github/scripts/drive_container.py \
+            --base-url http://127.0.0.1:8099 --verify-only
+
+      - name: Restart the server and re-assert
+        run: |
+          set -euo pipefail
+          docker restart atl
+          for _ in $(seq 1 60); do
+            curl -sf http://127.0.0.1:8099/api/v1/health >/dev/null && break
+            sleep 2
+          done
+          cd server
+          python .github/scripts/drive_container.py \
+            --base-url http://127.0.0.1:8099 --verify-only
+
+      - name: Query the day through MCP
+        run: |
+          set -euo pipefail
+          cd server
+          python .github/scripts/query_mcp.py --volume atl-e2e --device "${DEVICE_ID}"
+
+      - name: No secret appears in any log
+        if: always()
+        run: |
+          set -euo pipefail
+          token="$(cat "${RUNNER_TEMP}/device-token" 2>/dev/null || echo 'no-token')"
+          docker logs atl > "${RUNNER_TEMP}/app.log" 2>&1 || true
+          found=0
+          for log in "${RUNNER_TEMP}/app.log" "${RUNNER_TEMP}/collector-data/collector.log"; do
+            [ -f "$log" ] || continue
+            if grep -qF "${token}" "$log"; then
+              echo "::error::the device token appears in $(basename "$log")"
+              found=1
+            fi
+            if grep -qF "${ADMIN_TOKEN}" "$log"; then
+              echo "::error::the admin token appears in $(basename "$log")"
+              found=1
+            fi
+          done
+          exit "$found"
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          mkdir -p diagnostics
+          docker logs atl > diagnostics/app.log 2>&1 || true
+          cp "${RUNNER_TEMP}"/collector-*.json diagnostics/ 2>/dev/null || true
+          token="$(cat "${RUNNER_TEMP}/device-token" 2>/dev/null || echo '')"
+          if [ -n "${token}" ]; then
+            find diagnostics -type f -exec sed -i "s/${token}/<redacted>/g" {} +
+          fi
+          find diagnostics -type f -exec \
+            sed -i -E 's/(Bearer )[A-Za-z0-9._-]+/\1<redacted>/g' {} +
+
+      - uses: actions/upload-artifact@v7.0.1
+        if: failure()
+        with:
+          name: cross-repo-diagnostics
+          path: server/diagnostics/
+          retention-days: 3
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f atl || true
+          docker volume rm atl-e2e || true

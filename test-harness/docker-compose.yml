@@ -1,0 +1,45 @@
+# Local development harness.
+#
+#   docker compose -f test-harness/docker-compose.yml up --build
+#
+# Starts the app exactly as Home Assistant would run it, plus a synthetic
+# phone that uploads the same deterministic day CI uses. Nothing here is
+# required by CI -- the workflows drive the same image directly -- but it
+# makes the whole pipeline reproducible on a laptop without Home Assistant.
+services:
+  app:
+    build:
+      context: ../android_timeline
+    container_name: android-timeline-app
+    ports:
+      # Published only for local development. The real app is ingress-only.
+      - "127.0.0.1:8099:8099"
+    volumes:
+      - app-data:/data
+    environment:
+      ANDROID_TIMELINE_ADMIN_TOKEN: synthetic-local-admin-token
+      ANDROID_TIMELINE_TIMEZONE: UTC
+      ANDROID_TIMELINE_LOG_LEVEL: INFO
+      # No SUPERVISOR_TOKEN: entity publishing is skipped locally.
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8099/api/v1/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  synthetic-phone:
+    build:
+      context: ./synthetic-phone
+    container_name: android-timeline-synthetic-phone
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://app:8099
+      ADMIN_TOKEN: synthetic-local-admin-token
+      DEVICE_ID: device-test-001
+    volumes:
+      - ../:/repo:ro
+
+volumes:
+  app-data:

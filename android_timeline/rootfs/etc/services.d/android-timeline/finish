@@ -1,0 +1,9 @@
+#!/usr/bin/execlineb -S1
+# shellcheck shell=bash
+#
+# If the service exits, take the whole container down so Supervisor's
+# restart policy applies rather than leaving a half-dead app.
+if { s6-test ${1} -ne 0 }
+if { s6-test ${1} -ne 256 }
+
+s6-svscanctl -t /var/run/s6/services

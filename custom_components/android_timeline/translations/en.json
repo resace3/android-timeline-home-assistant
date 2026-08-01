@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Android Timeline",
+        "description": "Connect to the Android Timeline app. The default URL works when the app runs on the same Home Assistant instance. An admin token is only needed if the app is reachable outside ingress.",
+        "data": {
+          "base_url": "App URL",
+          "admin_token": "Admin token (optional)"
+        },
+        "data_description": {
+          "base_url": "The base URL of the Android Timeline app, without a trailing slash.",
+          "admin_token": "Leave empty unless you set one in the app's configuration."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Android Timeline app at that URL.",
+      "invalid_auth": "The app rejected that admin token."
+    },
+    "abort": {
+      "already_configured": "This Android Timeline app is already configured."
+    }
+  }
+}
