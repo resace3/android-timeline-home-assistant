@@ -66,11 +66,16 @@ jobs:
           DESCRIPTION: ${{ steps.info.outputs.description }}
         run: |
           set -euo pipefail
-          echo "image_name=${IMAGE##*/}" >> "$GITHUB_OUTPUT"
-          echo "registry_prefix=${IMAGE%/*}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "description=${DESCRIPTION}" >> "$GITHUB_OUTPUT"
+          # helpers/info emits JSON-encoded scalars, so every value arrives
+          # wrapped in literal double quotes. They must come off before the
+          # values reach a Docker tag, or buildx rejects the reference.
+          unquote() { printf '%s' "$1" | sed -e 's/^"//' -e 's/"$//'; }
+          image=$(unquote "${IMAGE}")
+          echo "image_name=${image##*/}" >> "$GITHUB_OUTPUT"
+          echo "registry_prefix=${image%/*}" >> "$GITHUB_OUTPUT"
+          echo "version=$(unquote "${VERSION}")" >> "$GITHUB_OUTPUT"
+          echo "name=$(unquote "${NAME}")" >> "$GITHUB_OUTPUT"
+          echo "description=$(unquote "${DESCRIPTION}")" >> "$GITHUB_OUTPUT"
           # Publish only on a release, or when asked explicitly. Pull
           # requests build without pushing so a fork can never publish.
           if [ "${{ github.event_name }}" = "release" ] || \

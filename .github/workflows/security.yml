@@ -123,7 +123,7 @@ jobs:
           tags: android-timeline:scan
 
       - name: Scan with Trivy
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: android-timeline:scan
           format: sarif
@@ -139,7 +139,7 @@ jobs:
           category: trivy-container
 
       - name: Fail on a fixable critical vulnerability
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: android-timeline:scan
           format: table
@@ -180,8 +180,22 @@ jobs:
       - name: The app config must not ship a token value
         run: |
           set -euo pipefail
-          if grep -nE '^\s*admin_token:\s*\S' android_timeline/config.yaml; then
-            echo '::error::config.yaml assigns an admin_token value'
-            exit 1
-          fi
+          python -m pip install --quiet pyyaml
+          # Only the options block may assign a value; the schema block
+          # legitimately declares dmin_token: password?.
+          python - <<'PY'
+          import pathlib
+          import sys
+
+          import yaml
+
+          config = yaml.safe_load(pathlib.Path("android_timeline/config.yaml").read_text())
+          if config.get("options", {}).get("admin_token"):
+              print("::error::config.yaml ships an admin_token value")
+              sys.exit(1)
+          if config.get("schema", {}).get("admin_token") != "password?":
+              print("::error::admin_token must be declared as an optional password")
+              sys.exit(1)
+          print("no token value in the shipped configuration")
+          PY
           echo 'no token value in the shipped configuration'
