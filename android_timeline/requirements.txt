@@ -1,7 +1,7 @@
 # Pinned runtime dependencies for the Home Assistant app image.
 # Dependabot keeps these current; CI audits them with pip-audit.
 fastapi==0.141.1
-uvicorn==0.52.0
+uvicorn==0.52.1
 pydantic==2.13.4
 httpx==0.28.1
 mcp==2.0.0
